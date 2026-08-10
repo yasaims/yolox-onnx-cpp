@@ -59,9 +59,14 @@ target_link_libraries(yolox_onnx_cpp PRIVATE
 )
 
 # On Windows, onnxruntime.dll must sit next to the executable at runtime.
-add_custom_command(TARGET yolox_onnx_cpp POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    $<TARGET_RUNTIME_DLLS:yolox_onnx_cpp>
-    $<TARGET_FILE_DIR:yolox_onnx_cpp>
-  COMMAND_EXPAND_LISTS
-)
+# $<TARGET_RUNTIME_DLLS:...> is an empty list on Linux/macOS, which makes
+# copy_if_different receive zero arguments and fail; limit to WIN32 (see
+# same pattern in tests/CMakeLists.txt).
+if(WIN32)
+  add_custom_command(TARGET yolox_onnx_cpp POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_RUNTIME_DLLS:yolox_onnx_cpp>
+      $<TARGET_FILE_DIR:yolox_onnx_cpp>
+    COMMAND_EXPAND_LISTS
+  )
+endif()
