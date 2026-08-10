@@ -9,15 +9,54 @@ target_link_libraries(yolox_engine PUBLIC
   PRIVATE yolox_warnings
 )
 
+add_library(yolox_preprocess
+  preprocess/letterbox.cpp
+)
+target_include_directories(yolox_preprocess PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(yolox_preprocess PUBLIC
+  opencv_core
+  opencv_imgproc
+  PRIVATE yolox_warnings
+)
+
+add_library(yolox_postprocess
+  postprocess/decode.cpp
+  postprocess/nms.cpp
+)
+target_include_directories(yolox_postprocess PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(yolox_postprocess PUBLIC
+  opencv_core
+  PRIVATE yolox_warnings
+)
+
+add_library(yolox_io
+  io/draw.cpp
+)
+target_include_directories(yolox_io PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(yolox_io PUBLIC
+  opencv_core
+  opencv_imgproc
+  yolox_postprocess
+  PRIVATE yolox_warnings
+)
+
 add_executable(yolox_onnx_cpp
   main.cpp
 )
 target_link_libraries(yolox_onnx_cpp PRIVATE
   yolox_engine
-  ${OpenCV_LIBS}
+  yolox_preprocess
+  yolox_postprocess
+  yolox_io
+  opencv_imgcodecs
   yolox_warnings
 )
-target_include_directories(yolox_onnx_cpp PRIVATE ${OpenCV_INCLUDE_DIRS})
 
 # On Windows, onnxruntime.dll must sit next to the executable at runtime.
 add_custom_command(TARGET yolox_onnx_cpp POST_BUILD

@@ -36,17 +36,23 @@ cmake --build --preset msys2-ucrt64-debug
 ## 実行
 
 ```bash
-./build/msys2-ucrt64-debug/src/yolox_onnx_cpp.exe --model models/yolox_nano.onnx --input <画像パス> --verbose
+./build/msys2-ucrt64-debug/src/yolox_onnx_cpp.exe \
+  --model models/yolox_nano.onnx --input <画像パス> \
+  [--output result.jpg] [--size 416] [--score-thr 0.30] [--nms-thr 0.45] [--verbose]
 ```
 
-Phase 1時点では前処理は単純リサイズのみ(letterbox・NMS・描画は未実装)。出力は生テンソルの形状・先頭要素をそのまま表示する。YOLOX-Nanoなら以下の形になる:
+letterbox前処理 (アスペクト比維持 + 右下パディング) → 推論 → デコード (grid/stride適用) → NMS →
+元画像スケールへの座標逆変換 → 描画、まで一気通貫で実行し、`--output` (既定 `output.jpg`) に
+検出結果を描画した画像を書き出す。標準出力には検出件数と各検出のクラス・スコア・座標を表示する:
 
 ```
-input  "images" shape=[1, 3, 416, 416]
-output "output" shape=[1, 3549, 85]
-output shape=[1, 3549, 85] elements=301665 first10=[...]
+detections=1
+  class=0 score=0.671259 x=45.9994 y=59.1137 w=355.777 h=448.329
 ```
+
+`--verbose` を付けると入出力テンソルの形状と生出力の先頭10要素も表示する(Phase 1からの継続)。
 
 ## 設計判断
 
-C++バージョン、CPU Execution Provider採用理由、依存解決の方針などは [docs/adr/](docs/adr/) を参照。
+C++バージョン、CPU Execution Provider採用理由、依存解決の方針、NMS自前実装の意図などは
+[docs/adr/](docs/adr/) を参照。
