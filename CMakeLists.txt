@@ -15,12 +15,22 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 # Common compiler warnings, collected in one interface library so every
-# target (and the future CI matrix in Phase 3) picks them up consistently.
+# target (and the Phase 3 CI matrix) picks them up consistently.
 add_library(yolox_warnings INTERFACE)
 if(MSVC)
   target_compile_options(yolox_warnings INTERFACE /W4)
 else()
   target_compile_options(yolox_warnings INTERFACE -Wall -Wextra -Wpedantic)
+endif()
+
+# CIではデフォルトで警告をエラー化する (ローカル開発は既定OFFのまま緩く保つ)。
+option(YOLOX_WERROR "Treat warnings as errors" OFF)
+if(YOLOX_WERROR)
+  if(MSVC)
+    target_compile_options(yolox_warnings INTERFACE /WX)
+  else()
+    target_compile_options(yolox_warnings INTERFACE -Werror)
+  endif()
 endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
