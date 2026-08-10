@@ -1,0 +1,28 @@
+add_library(yolox_engine
+  engine/inference_session.cpp
+)
+target_include_directories(yolox_engine PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(yolox_engine PUBLIC
+  onnxruntime::onnxruntime
+  PRIVATE yolox_warnings
+)
+
+add_executable(yolox_onnx_cpp
+  main.cpp
+)
+target_link_libraries(yolox_onnx_cpp PRIVATE
+  yolox_engine
+  ${OpenCV_LIBS}
+  yolox_warnings
+)
+target_include_directories(yolox_onnx_cpp PRIVATE ${OpenCV_INCLUDE_DIRS})
+
+# On Windows, onnxruntime.dll must sit next to the executable at runtime.
+add_custom_command(TARGET yolox_onnx_cpp POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    $<TARGET_RUNTIME_DLLS:yolox_onnx_cpp>
+    $<TARGET_FILE_DIR:yolox_onnx_cpp>
+  COMMAND_EXPAND_LISTS
+)
