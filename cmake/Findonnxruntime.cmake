@@ -12,8 +12,15 @@ already-provided ONNX Runtime, from either of:
      ships ``onnxruntimeConfig.cmake``). Preferred when available.
   2. A plain include/lib layout, such as the official prebuilt archives
      from https://github.com/microsoft/onnxruntime/releases. Point CMake
-     at it via ``-DCMAKE_PREFIX_PATH=<extracted-dir>`` or
-     ``-DONNXRUNTIME_ROOT=<extracted-dir>``.
+     at it via ``-DONNXRUNTIME_ROOT=<extracted-dir>``.
+
+Note: the official prebuilt archive's own ``onnxruntimeConfig.cmake`` (route
+1) is broken as of 1.20.1 -- its ``onnxruntimeTargets.cmake`` hardcodes a
+``lib64`` path even though the archive ships the library under ``lib``, and
+it raises a ``message(FATAL_ERROR)`` that ``find_package(... QUIET)`` cannot
+suppress. Passing ``ONNXRUNTIME_ROOT`` therefore skips route 1 entirely and
+goes straight to the manual search below, so pointing at a prebuilt archive
+never risks tripping over its own broken CONFIG package.
 
 Result Variables
 ^^^^^^^^^^^^^^^^^
@@ -27,9 +34,15 @@ Imported Targets
 #]=======================================================================]
 
 # 1. Prefer an upstream CONFIG package if one is installed (MSYS2/vcpkg/conda).
-find_package(onnxruntime CONFIG QUIET)
-if(onnxruntime_FOUND)
-  return()
+#    Skipped when ONNXRUNTIME_ROOT is set explicitly: that's the caller
+#    saying "use the plain include/lib layout at this path" (route 2 below),
+#    and the official prebuilt archive's own CONFIG package is broken (see
+#    docstring above), so we must not let find_package() go looking for it.
+if(NOT ONNXRUNTIME_ROOT)
+  find_package(onnxruntime CONFIG QUIET)
+  if(onnxruntime_FOUND)
+    return()
+  endif()
 endif()
 
 # 2. Fall back to a manual search across the plain include/lib layout used by

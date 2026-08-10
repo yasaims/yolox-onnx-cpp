@@ -56,7 +56,7 @@ jobs:
             preset=linux-gcc-release
           fi
           cmake --preset "$preset" \
-            -DCMAKE_PREFIX_PATH="${{ runner.temp }}/onnxruntime" \
+            -DONNXRUNTIME_ROOT="${{ runner.temp }}/onnxruntime" \
             -DYOLOX_WERROR=ON
 
       - name: Build
