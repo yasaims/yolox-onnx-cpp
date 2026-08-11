@@ -1,90 +1,30 @@
-// Phase 2 CLI entry point: letterbox前処理 -> 推論 -> デコード/NMS -> 座標逆変換 ->
-// 描画、までの一気通貫パイプライン。推論コア (engine/) は前後処理の知識を持たず、
-// 本ファイルが各モジュールを接続する。
-#include <cstdlib>
+// Phase 4 CLI entry point: 引数解析 -> ラベル読込 -> Detector構築 -> 静止画/動画モード分岐、
+// までを行う薄い層。letterbox前処理〜座標逆変換の実体は pipeline::Detector (Phase 2の
+// パイプラインを再利用可能なクラスへ抽出したもの) が持ち、静止画・動画の両パスで共有する。
+#include <algorithm>
+#include <chrono>
+#include <deque>
 #include <iostream>
 #include <memory>
-#include <optional>
+#include <numeric>
 #include <string>
 #include <vector>
 
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/videoio.hpp>
 
-#include "engine/inference_session.hpp"
+#include "io/cli_args.hpp"
 #include "io/draw.hpp"
-#include "postprocess/decode.hpp"
-#include "postprocess/detection.hpp"
-#include "postprocess/nms.hpp"
-#include "preprocess/letterbox.hpp"
+#include "io/labels.hpp"
+#include "io/result_writer.hpp"
+#include "pipeline/detector.hpp"
 
 namespace {
 
-struct CliArgs {
-    std::string model_path;
-    std::string input_path;
-    std::string output_path = "output.jpg";
-    int size = 416;
-    float score_threshold = 0.30F;
-    float nms_threshold = 0.45F;
-    bool verbose = false;
-};
-
-void PrintUsage(const char* program_name) {
-    std::cerr << "Usage: " << program_name
-              << " --model <model.onnx> --input <image> [--output result.jpg]"
-                 " [--size 416] [--score-thr 0.30] [--nms-thr 0.45] [--verbose]\n";
-}
-
-std::optional<CliArgs> ParseArgs(int argc, char** argv) {
-    CliArgs args;
-    for (int i = 1; i < argc; ++i) {
-        const std::string arg = argv[i];
-        auto next_value = [&]() -> std::optional<std::string> {
-            if (i + 1 >= argc) return std::nullopt;
-            return std::string(argv[++i]);
-        };
-
-        if (arg == "--model") {
-            auto value = next_value();
-            if (!value) return std::nullopt;
-            args.model_path = *value;
-        } else if (arg == "--input") {
-            auto value = next_value();
-            if (!value) return std::nullopt;
-            args.input_path = *value;
-        } else if (arg == "--output") {
-            auto value = next_value();
-            if (!value) return std::nullopt;
-            args.output_path = *value;
-        } else if (arg == "--size") {
-            auto value = next_value();
-            if (!value) return std::nullopt;
-            args.size = std::atoi(value->c_str());
-        } else if (arg == "--score-thr") {
-            auto value = next_value();
-            if (!value) return std::nullopt;
-            args.score_threshold = std::strtof(value->c_str(), nullptr);
-        } else if (arg == "--nms-thr") {
-            auto value = next_value();
-            if (!value) return std::nullopt;
-            args.nms_threshold = std::strtof(value->c_str(), nullptr);
-        } else if (arg == "--verbose") {
-            args.verbose = true;
-        } else {
-            std::cerr << "Unknown argument: " << arg << "\n";
-            return std::nullopt;
-        }
-    }
-    if (args.model_path.empty() || args.input_path.empty() || args.size <= 0) {
-        return std::nullopt;
-    }
-    if (args.score_threshold < 0.0F || args.score_threshold > 1.0F || args.nms_threshold < 0.0F ||
-        args.nms_threshold > 1.0F) {
-        std::cerr << "--score-thr / --nms-thr must be within [0.0, 1.0]\n";
-        return std::nullopt;
-    }
-    return args;
-}
+using yolox::io::CliArgs;
+using yolox::io::OutputFormat;
+using yolox::io::ResultMeta;
+using yolox::io::RunMode;
 
 void PrintTensorInfo(const char* label, const yolox::engine::TensorInfo& info) {
     std::cout << label << " \"" << info.name << "\" shape=[";
@@ -95,118 +35,214 @@ void PrintTensorInfo(const char* label, const yolox::engine::TensorInfo& info) {
     std::cout << "]\n";
 }
 
-}  // namespace
+// 拡張子 (小文字化) から動画かどうかを推定する。--mode auto のときのみ使う。
+bool LooksLikeVideo(const std::string& path) {
+    static const std::vector<std::string> kVideoExtensions = {".mp4", ".avi", ".mov",
+                                                                ".mkv", ".webm", ".m4v"};
+    const size_t dot = path.find_last_of('.');
+    if (dot == std::string::npos) return false;
+    std::string ext = path.substr(dot);
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
+    return std::find(kVideoExtensions.begin(), kVideoExtensions.end(), ext) != kVideoExtensions.end();
+}
 
-int main(int argc, char** argv) {
-    const auto args = ParseArgs(argc, argv);
-    if (!args) {
-        PrintUsage(argv[0]);
-        return 1;
+bool ResolveIsVideo(const CliArgs& args) {
+    switch (args.mode) {
+        case RunMode::kImage:
+            return false;
+        case RunMode::kVideo:
+            return true;
+        case RunMode::kAuto:
+        default:
+            return LooksLikeVideo(args.input_path);
     }
+}
 
-    const cv::Mat image = cv::imread(args->input_path, cv::IMREAD_COLOR);
+std::string DefaultOutputPath(bool is_video) { return is_video ? "output.mp4" : "output.jpg"; }
+
+ResultMeta BuildMeta(const CliArgs& args, const cv::Size& image_size) {
+    ResultMeta meta;
+    meta.model_path = args.model_path;
+    meta.input_path = args.input_path;
+    meta.input_size = args.size;
+    meta.score_threshold = args.score_threshold;
+    meta.nms_threshold = args.nms_threshold;
+    meta.image_size = image_size;
+    return meta;
+}
+
+void WriteResult(std::ostream& os, const std::vector<yolox::postprocess::Detection>& detections,
+                  const std::vector<std::string>& labels, const ResultMeta& meta, OutputFormat format) {
+    if (format == OutputFormat::kJson) {
+        yolox::io::WriteJson(os, detections, labels, meta);
+    } else {
+        yolox::io::WriteText(os, detections, labels, meta);
+    }
+}
+
+int RunImage(const CliArgs& args, yolox::pipeline::Detector& detector,
+             const std::vector<std::string>& labels) {
+    const cv::Mat image = cv::imread(args.input_path, cv::IMREAD_COLOR);
     if (image.empty()) {
-        std::cerr << "Failed to read input image: " << args->input_path << "\n";
+        std::cerr << "Failed to read input image: " << args.input_path << "\n";
         return 2;
     }
 
-    std::unique_ptr<yolox::engine::InferenceSession> session;
-    try {
-        session = std::make_unique<yolox::engine::InferenceSession>(args->model_path);
-    } catch (const Ort::Exception& e) {
-        std::cerr << "Failed to load model \"" << args->model_path << "\": " << e.what() << "\n";
-        return 2;
+    if (args.verbose) {
+        for (const auto& info : detector.session().inputs()) PrintTensorInfo("input ", info);
+        for (const auto& info : detector.session().outputs()) PrintTensorInfo("output", info);
     }
 
-    if (args->verbose) {
-        for (const auto& info : session->inputs()) PrintTensorInfo("input ", info);
-        for (const auto& info : session->outputs()) PrintTensorInfo("output", info);
-    }
-
-    const cv::Size target_size(args->size, args->size);
-    const yolox::preprocess::LetterboxResult letterboxed =
-        yolox::preprocess::Letterbox(image, target_size);
-    const std::vector<float> input_data = yolox::preprocess::ToChwFloat(letterboxed.image);
-    const std::vector<int64_t> input_shape = {1, 3, args->size, args->size};
-
-    std::vector<Ort::Value> outputs;
+    std::vector<yolox::postprocess::Detection> detections;
     try {
-        outputs = session->run(input_data, input_shape);
+        detections = detector.Detect(image);
+    } catch (const yolox::pipeline::DetectorError& e) {
+        std::cerr << e.what() << "\n";
+        return 4;
     } catch (const Ort::Exception& e) {
         std::cerr << "Inference failed: " << e.what() << "\n";
         return 3;
     }
 
-    if (outputs.empty()) {
-        std::cerr << "Model produced no output tensors\n";
-        return 4;
-    }
+    const ResultMeta meta = BuildMeta(args, image.size());
+    WriteResult(std::cout, detections, labels, meta, args.format);
 
-    const auto& output_infos = session->outputs();
-    if (args->verbose) {
-        for (size_t i = 0; i < outputs.size(); ++i) {
-            const auto shape = outputs[i].GetTensorTypeAndShapeInfo().GetShape();
-            const size_t element_count = outputs[i].GetTensorTypeAndShapeInfo().GetElementCount();
-            const std::string name =
-                i < output_infos.size() ? output_infos[i].name : "output" + std::to_string(i);
-
-            std::cout << name << " shape=[";
-            for (size_t d = 0; d < shape.size(); ++d) {
-                std::cout << shape[d];
-                if (d + 1 < shape.size()) std::cout << ", ";
-            }
-            std::cout << "] elements=" << element_count << " first10=[";
-
-            const float* data = outputs[i].GetTensorData<float>();
-            const size_t preview_count = std::min<size_t>(10, element_count);
-            for (size_t j = 0; j < preview_count; ++j) {
-                std::cout << data[j];
-                if (j + 1 < preview_count) std::cout << ", ";
-            }
-            std::cout << "]\n";
+    if (!args.no_draw) {
+        cv::Mat output_image = image.clone();
+        yolox::io::DrawDetections(output_image, detections, labels);
+        const std::string output_path = args.output_path.empty() ? DefaultOutputPath(false) : args.output_path;
+        if (!cv::imwrite(output_path, output_image)) {
+            std::cerr << "Failed to write output image: " << output_path << "\n";
+            return 5;
         }
     }
 
-    // 検出ヘッド出力は shape [1, num_anchors, 5+num_classes] を想定する。
-    const auto out_shape = outputs[0].GetTensorTypeAndShapeInfo().GetShape();
-    if (out_shape.size() != 3 || out_shape[0] != 1 || out_shape[2] <= 5) {
-        std::cerr << "Unexpected output tensor shape (expected [1, num_anchors, 5+num_classes])\n";
-        return 4;
-    }
-    const size_t num_anchors = static_cast<size_t>(out_shape[1]);
-    const size_t num_attrs = static_cast<size_t>(out_shape[2]);
-    const float* output_data = outputs[0].GetTensorData<float>();
+    return 0;
+}
 
-    std::vector<yolox::postprocess::Detection> detections;
-    try {
-        yolox::postprocess::DecodeConfig decode_config;
-        decode_config.input_size = target_size;
-        decode_config.score_threshold = args->score_threshold;
-        detections = yolox::postprocess::Decode(output_data, num_anchors, num_attrs, decode_config);
-    } catch (const std::invalid_argument& e) {
-        std::cerr << "Decode failed: " << e.what() << "\n";
-        return 4;
+int RunVideo(const CliArgs& args, yolox::pipeline::Detector& detector,
+             const std::vector<std::string>& labels) {
+    cv::VideoCapture cap(args.input_path);
+    if (!cap.isOpened()) {
+        std::cerr << "Failed to open input video: " << args.input_path << "\n";
+        return 2;
     }
 
-    detections = yolox::postprocess::NonMaxSuppression(detections, args->nms_threshold);
-
-    for (auto& det : detections) {
-        det = yolox::postprocess::ToOriginalScale(det, letterboxed.info.ratio, image.size());
+    if (args.verbose) {
+        for (const auto& info : detector.session().inputs()) PrintTensorInfo("input ", info);
+        for (const auto& info : detector.session().outputs()) PrintTensorInfo("output", info);
     }
 
-    std::cout << "detections=" << detections.size() << "\n";
-    for (const auto& det : detections) {
-        std::cout << "  class=" << det.class_id << " score=" << det.score << " x=" << det.box.x
-                   << " y=" << det.box.y << " w=" << det.box.width << " h=" << det.box.height << "\n";
+    const std::string output_path = args.output_path.empty() ? DefaultOutputPath(true) : args.output_path;
+    cv::VideoWriter writer;
+    if (!args.no_draw) {
+        const double input_fps = cap.get(cv::CAP_PROP_FPS);
+        const int width = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
+        const int height = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
+        const int fourcc = cv::VideoWriter::fourcc('m', 'p', '4', 'v');
+        writer.open(output_path, fourcc, input_fps > 0 ? input_fps : 30.0, cv::Size(width, height));
+        if (!writer.isOpened()) {
+            std::cerr << "Failed to open output video for writing: " << output_path << "\n";
+            return 5;
+        }
     }
 
-    cv::Mat output_image = image.clone();
-    yolox::io::DrawDetections(output_image, detections);
+    std::deque<double> recent_frame_seconds;
+    constexpr size_t kFpsWindow = 30;
+    const auto run_start = std::chrono::steady_clock::now();
 
-    if (!cv::imwrite(args->output_path, output_image)) {
-        std::cerr << "Failed to write output image: " << args->output_path << "\n";
-        return 5;
+    int frame_index = 0;
+    cv::Mat frame;
+    while (cap.read(frame)) {
+        if (args.max_frames > 0 && frame_index >= args.max_frames) break;
+
+        const auto frame_start = std::chrono::steady_clock::now();
+
+        std::vector<yolox::postprocess::Detection> detections;
+        try {
+            detections = detector.Detect(frame);
+        } catch (const yolox::pipeline::DetectorError& e) {
+            std::cerr << e.what() << "\n";
+            return 4;
+        } catch (const Ort::Exception& e) {
+            std::cerr << "Inference failed: " << e.what() << "\n";
+            return 3;
+        }
+
+        const auto frame_end = std::chrono::steady_clock::now();
+        const double frame_seconds = std::chrono::duration<double>(frame_end - frame_start).count();
+        recent_frame_seconds.push_back(frame_seconds);
+        if (recent_frame_seconds.size() > kFpsWindow) recent_frame_seconds.pop_front();
+        const double avg_seconds =
+            std::accumulate(recent_frame_seconds.begin(), recent_frame_seconds.end(), 0.0) /
+            static_cast<double>(recent_frame_seconds.size());
+        const double fps = avg_seconds > 0.0 ? 1.0 / avg_seconds : 0.0;
+
+        ResultMeta meta = BuildMeta(args, frame.size());
+        meta.frame_index = frame_index;
+        meta.fps = fps;
+        WriteResult(std::cout, detections, labels, meta, args.format);
+
+        if (!args.no_draw) {
+            yolox::io::DrawDetections(frame, detections, labels);
+            yolox::io::DrawFps(frame, fps);
+            writer.write(frame);
+        }
+
+        ++frame_index;
     }
+
+    const auto run_end = std::chrono::steady_clock::now();
+    const double total_seconds = std::chrono::duration<double>(run_end - run_start).count();
+    const double average_fps = total_seconds > 0.0 ? static_cast<double>(frame_index) / total_seconds : 0.0;
+    std::cerr << "Processed " << frame_index << " frames in " << total_seconds
+              << "s (average " << average_fps << " fps)\n";
 
     return 0;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    const auto parsed = yolox::io::ParseArgs(argc, argv);
+    if (parsed.status == yolox::io::ParseResult::Status::kHelp) {
+        std::cout << yolox::io::UsageText(argv[0]);
+        return 0;
+    }
+    if (parsed.status == yolox::io::ParseResult::Status::kError) {
+        std::cerr << parsed.error << "\n";
+        std::cerr << yolox::io::UsageText(argv[0]);
+        return 1;
+    }
+    const CliArgs& args = parsed.args;
+
+    if (args.size % 32 != 0) {
+        std::cerr << "Warning: --size " << args.size
+                  << " is not a multiple of 32; YOLOX uses strides 8/16/32.\n";
+    }
+
+    std::vector<std::string> labels;
+    try {
+        labels = args.labels_path.empty() ? yolox::io::DefaultCocoLabels()
+                                           : yolox::io::LoadLabels(args.labels_path);
+    } catch (const std::runtime_error& e) {
+        std::cerr << e.what() << "\n";
+        return 2;
+    }
+
+    yolox::pipeline::DetectorConfig config;
+    config.input_size = args.size;
+    config.score_threshold = args.score_threshold;
+    config.nms_threshold = args.nms_threshold;
+
+    std::unique_ptr<yolox::pipeline::Detector> detector;
+    try {
+        detector = std::make_unique<yolox::pipeline::Detector>(args.model_path, config);
+    } catch (const Ort::Exception& e) {
+        std::cerr << "Failed to load model \"" << args.model_path << "\": " << e.what() << "\n";
+        return 2;
+    }
+
+    const bool is_video = ResolveIsVideo(args);
+    return is_video ? RunVideo(args, *detector, labels) : RunImage(args, *detector, labels);
 }

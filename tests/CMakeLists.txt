@@ -5,10 +5,14 @@ add_executable(yolox_tests
   test_decode.cpp
   test_letterbox.cpp
   test_nms.cpp
+  test_cli_args.cpp
+  test_labels.cpp
+  test_result_writer.cpp
 )
 target_link_libraries(yolox_tests PRIVATE
   yolox_preprocess
   yolox_postprocess
+  yolox_io
   GTest::gtest_main
   yolox_warnings
 )

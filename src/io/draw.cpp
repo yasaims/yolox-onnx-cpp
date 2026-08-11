@@ -5,7 +5,7 @@
 
 #include <opencv2/imgproc.hpp>
 
-#include "io/coco_labels.hpp"
+#include "io/labels.hpp"
 
 namespace yolox::io {
 
@@ -19,7 +19,8 @@ cv::Scalar ColorForClass(int class_id) {
     return cv::Scalar(pixel[0], pixel[1], pixel[2]);
 }
 
-void DrawDetections(cv::Mat& image, const std::vector<postprocess::Detection>& detections) {
+void DrawDetections(cv::Mat& image, const std::vector<postprocess::Detection>& detections,
+                     const std::vector<std::string>& labels) {
     const int thickness = std::max(1, std::min(image.cols, image.rows) / 400);
 
     for (const auto& det : detections) {
@@ -27,14 +28,8 @@ void DrawDetections(cv::Mat& image, const std::vector<postprocess::Detection>& d
         const cv::Rect box(det.box);
         cv::rectangle(image, box, color, thickness);
 
-        std::string label;
-        if (det.class_id >= 0 && static_cast<size_t>(det.class_id) < kCocoClassNames.size()) {
-            label = kCocoClassNames[static_cast<size_t>(det.class_id)];
-        } else {
-            label = "class_" + std::to_string(det.class_id);
-        }
         std::ostringstream oss;
-        oss << label << " " << std::fixed;
+        oss << LabelFor(labels, det.class_id) << " " << std::fixed;
         oss.precision(2);
         oss << det.score;
         const std::string text = oss.str();
@@ -48,6 +43,28 @@ void DrawDetections(cv::Mat& image, const std::vector<postprocess::Detection>& d
         cv::putText(image, text, cv::Point(box.x + 1, label_top + text_size.height + 1),
                     cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), 1, cv::LINE_AA);
     }
+}
+
+void DrawDetections(cv::Mat& image, const std::vector<postprocess::Detection>& detections) {
+    DrawDetections(image, detections, DefaultCocoLabels());
+}
+
+void DrawFps(cv::Mat& image, double fps) {
+    std::ostringstream oss;
+    oss << "FPS: " << std::fixed;
+    oss.precision(1);
+    oss << fps;
+    const std::string text = oss.str();
+
+    int baseline = 0;
+    const cv::Size text_size = cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX, 0.6, 2, &baseline);
+    const cv::Rect bg(0, 0, text_size.width + 12, text_size.height + baseline + 12);
+    cv::Mat roi = image(bg & cv::Rect(0, 0, image.cols, image.rows));
+    cv::Mat overlay(roi.size(), roi.type(), cv::Scalar(0, 0, 0));
+    cv::addWeighted(overlay, 0.5, roi, 0.5, 0.0, roi);
+
+    cv::putText(image, text, cv::Point(6, text_size.height + 6), cv::FONT_HERSHEY_SIMPLEX, 0.6,
+                cv::Scalar(255, 255, 255), 2, cv::LINE_AA);
 }
 
 }  // namespace yolox::io

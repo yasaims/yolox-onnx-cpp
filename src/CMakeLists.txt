@@ -35,6 +35,9 @@ target_link_libraries(yolox_postprocess PUBLIC
 
 add_library(yolox_io
   io/draw.cpp
+  io/labels.cpp
+  io/result_writer.cpp
+  io/cli_args.cpp
 )
 target_include_directories(yolox_io PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
@@ -42,6 +45,19 @@ target_include_directories(yolox_io PUBLIC
 target_link_libraries(yolox_io PUBLIC
   opencv_core
   opencv_imgproc
+  yolox_postprocess
+  PRIVATE yolox_warnings
+)
+
+add_library(yolox_pipeline
+  pipeline/detector.cpp
+)
+target_include_directories(yolox_pipeline PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(yolox_pipeline PUBLIC
+  yolox_engine
+  yolox_preprocess
   yolox_postprocess
   PRIVATE yolox_warnings
 )
@@ -54,7 +70,9 @@ target_link_libraries(yolox_onnx_cpp PRIVATE
   yolox_preprocess
   yolox_postprocess
   yolox_io
+  yolox_pipeline
   opencv_imgcodecs
+  opencv_videoio
   yolox_warnings
 )
 
