@@ -17,9 +17,14 @@ languages, not just internally self-consistent.
 
 Usage:
     python -m pip install -r scripts/requirements-dev.txt
-    python scripts/verify_parity.py [--model nano] [--input tests/data/test.jpg]
-        [--size 416] [--score-thr 0.30] [--nms-thr 0.45] [--bin path/to/exe]
-        [--atol 0.05] [--verbose]
+    python scripts/verify_parity.py [--model nano|tiny|path/to/model.onnx]
+        [--input tests/data/test.jpg] [--size 416] [--score-thr 0.30]
+        [--nms-thr 0.45] [--bin path/to/exe] [--atol 0.05] [--verbose]
+
+--size は省略するとモデルの入力shapeから決まる。YOLOX 0.1.1rc0 の配布ONNX
+(nano/tiny とも) は入力が [1, 3, 416, 416] に固定されているため、--size で
+他の値を指定しても推論できない。他サイズを試す場合は動的軸で再エクスポートした
+モデルを --model にパスで渡す。
 """
 from __future__ import annotations
 
@@ -69,7 +74,19 @@ def letterbox_ref(image: np.ndarray, target_size: int, pad_value: int = 114):
 
 
 def generate_grid_strides_ref(input_size: int, strides=STRIDES):
-    """stride昇順・各stride内はy外側/x内側の順でアンカー座標を生成する。"""
+    """stride昇順・各stride内はy外側/x内側の順でアンカー座標を生成する。
+
+    input_size が stride で割り切れない場合、`input_size // stride` が切り捨てられて
+    モデル側のグリッド数と静かにズレる。--size 側で弾いているが、この関数を直接
+    呼ばれた場合に備えてここでも検査する。
+    """
+    for stride in strides:
+        if input_size % stride != 0:
+            raise ValueError(
+                f"input_size={input_size} is not divisible by stride {stride} "
+                f"(strides={tuple(strides)})"
+            )
+
     grid_x_list, grid_y_list, stride_list = [], [], []
     for stride in strides:
         grid_w = input_size // stride
@@ -158,8 +175,8 @@ def to_original_scale_ref(box: np.ndarray, ratio: float, original_size: tuple[in
     return np.array([x1, y1, max(0.0, x2 - x1), max(0.0, y2 - y1)])
 
 
-def run_python_reference(model_path: Path, image_path: Path, size: int, score_thr: float,
-                          nms_thr: float, verbose: bool):
+def run_python_reference(session: "ort.InferenceSession", image_path: Path, size: int,
+                          score_thr: float, nms_thr: float, verbose: bool):
     image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
     if image is None:
         raise SystemExit(f"failed to read input image: {image_path}")
@@ -167,7 +184,6 @@ def run_python_reference(model_path: Path, image_path: Path, size: int, score_th
     chw, ratio = letterbox_ref(image, size)
     input_tensor = chw[np.newaxis, :, :, :]  # [1, 3, size, size]
 
-    session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
     input_name = session.get_inputs()[0].name
     (raw_output,) = session.run(None, {input_name: input_tensor})
     output = raw_output[0]  # [num_anchors, num_attrs]
@@ -189,6 +205,85 @@ def run_python_reference(model_path: Path, image_path: Path, size: int, score_th
                   f"w={bw:.4f} h={bh:.4f}")
 
     return detections
+
+
+# --- モデル・入力サイズの解決 -------------------------------------------------
+
+def resolve_model(spec: str) -> Path:
+    """--model は登録済みキー (nano/tiny) と .onnx のパスの両方を受け付ける。
+
+    パスを許すのは、動的軸で再エクスポートしたモデルなど download_model.py の
+    管理外のモデルでもparityを取れるようにするため。
+    """
+    if spec in MODELS:
+        return download(spec)
+
+    path = Path(spec)
+    if path.is_file():
+        return path
+
+    raise SystemExit(
+        f"unknown model {spec!r}: 登録済みキー ({'/'.join(sorted(MODELS))}) か、"
+        f"既存の .onnx ファイルパスを指定してください"
+    )
+
+
+def static_input_size(session: "ort.InferenceSession", model_path: Path) -> int | None:
+    """モデル入力の一辺のピクセル数。動的軸なら None を返す。
+
+    入力shapeは [N, C, H, W] 前提。動的軸の次元は int ではなく次元名の文字列
+    (または None) として返ってくるので、それで静的/動的を判別する。
+    """
+    shape = session.get_inputs()[0].shape
+    if len(shape) != 4:
+        raise SystemExit(
+            f"{model_path.name}: 入力shapeが {shape} で [N, C, H, W] ではありません"
+        )
+
+    height, width = shape[2], shape[3]
+    if not isinstance(height, int) or not isinstance(width, int):
+        return None
+    if height != width:
+        raise SystemExit(
+            f"{model_path.name}: 入力が {height}x{width} で正方形ではありません。"
+            f"この参照実装は正方形入力 (letterbox後) のみを前提にしています"
+        )
+    return height
+
+
+def resolve_size(requested: int | None, model_size: int | None, model_path: Path) -> int:
+    """--size とモデル側の入力サイズを突き合わせて実際に使うサイズを決める。
+
+    配布ONNXは入力shapeが固定なので、--size を食い違わせるとONNX Runtimeが
+    InvalidArgumentを投げる。それをそのまま素通しせず、原因と回避策を示す。
+    """
+    if model_size is None:
+        if requested is None:
+            raise SystemExit(
+                f"{model_path.name} は入力サイズが動的です。--size を明示してください"
+            )
+        size = requested
+    elif requested is None:
+        size = model_size
+        print(f"[info] --size 未指定のため、モデルの入力サイズ {size} を使用します")
+    elif requested != model_size:
+        raise SystemExit(
+            f"--size {requested} は {model_path.name} の入力サイズ {model_size} と一致しません。\n"
+            f"  この ONNX は入力shapeが [1, 3, {model_size}, {model_size}] に固定されているため、"
+            f"他のサイズでは推論できません。\n"
+            f"  他サイズを検証するには、入力H/Wを動的軸にして再エクスポートしたモデルを "
+            f"--model <path> で渡してください。"
+        )
+    else:
+        size = requested
+
+    for stride in STRIDES:
+        if size % stride != 0:
+            raise SystemExit(
+                f"--size {size} は stride {stride} で割り切れません (strides={STRIDES})。"
+                f"grid数がモデル出力のアンカー数と一致しなくなります"
+            )
+    return size
 
 
 # --- C++ CLIの標準出力パース ------------------------------------------------
@@ -281,9 +376,12 @@ def compare(py_dets, cpp_dets, atol: float, score_atol: float = 1e-4) -> bool:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__,
                                       formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--model", choices=sorted(MODELS.keys()), default="nano")
+    parser.add_argument("--model", default="nano",
+                         help=f"登録済みキー ({'/'.join(sorted(MODELS.keys()))}) "
+                              f"または .onnx へのパス (default: nano)")
     parser.add_argument("--input", default=str(REPO_ROOT / "tests" / "data" / "test.jpg"))
-    parser.add_argument("--size", type=int, default=416)
+    parser.add_argument("--size", type=int, default=None,
+                         help="letterbox後の一辺のピクセル数。省略時はモデルの入力shapeから決まる")
     parser.add_argument("--score-thr", type=float, default=0.30)
     parser.add_argument("--nms-thr", type=float, default=0.45)
     parser.add_argument("--bin", default=None, help="Path to the yolox_onnx_cpp binary")
@@ -294,15 +392,18 @@ def main() -> None:
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
-    model_path = download(args.model)
+    model_path = resolve_model(args.model)
     image_path = Path(args.input)
     binary = Path(args.bin) if args.bin else find_cli_binary()
 
-    print(f"[info] model={model_path} image={image_path} binary={binary}")
+    session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
+    size = resolve_size(args.size, static_input_size(session, model_path), model_path)
 
-    py_dets = run_python_reference(model_path, image_path, args.size, args.score_thr,
+    print(f"[info] model={model_path} size={size} image={image_path} binary={binary}")
+
+    py_dets = run_python_reference(session, image_path, size, args.score_thr,
                                     args.nms_thr, args.verbose)
-    cpp_dets = run_cpp_cli(binary, model_path, image_path, args.size, args.score_thr,
+    cpp_dets = run_cpp_cli(binary, model_path, image_path, size, args.score_thr,
                             args.nms_thr, args.verbose)
 
     ok = compare(py_dets, cpp_dets, atol=args.atol)

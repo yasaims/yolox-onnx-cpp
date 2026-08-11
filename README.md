@@ -10,7 +10,11 @@ C++製 物体検出推論CLI (ONNX Runtime + OpenCV)
 NMS → 座標逆変換 → 描画、まで一気通貫のCLIで生成している (下記「実行」参照)。
 動画入力にも対応しており、FPSオーバーレイ付きで結果を書き出せる (「動画入力」参照)。
 
-<!-- TODO: 動画検出のデモGIFをここに追加する (動画素材を用意でき次第)。 -->
+![動画検出デモ](docs/images/demo.gif)
+
+動画入力の実行例 (YOLOX-Nano / 416 / CPU)。左上のFPSは直近30フレームの移動平均で、
+デコードと描画を含む実測値。素材は OpenCV の `samples/data/vtest.avi`
+([opencv/opencv](https://github.com/opencv/opencv), Apache License 2.0) の一部を切り出したもの。
 
 ## 初期開発計画
 
@@ -128,6 +132,22 @@ gadget
 
 終了時に標準エラー出力へ総フレーム数・処理時間・平均FPSのサマリを表示する。
 
+冒頭のデモGIF (`docs/images/demo.gif`) は以下の手順で再生成できる。素材はOpenCVの
+サンプル動画 `samples/data/vtest.avi` (Apache License 2.0):
+
+```bash
+curl -sSL -o vtest.avi https://raw.githubusercontent.com/opencv/opencv/4.x/samples/data/vtest.avi
+# 検出数が安定している 120-199 フレーム (10fpsで8秒) を切り出す
+ffmpeg -i vtest.avi -vf "select='between(n,120,199)',setpts=N/10/TB" -r 10 \
+  -c:v libx264 -crf 12 -pix_fmt yuv420p segment.mp4
+./build/linux-gcc-release/src/yolox_onnx_cpp \
+  --model models/yolox_nano.onnx --input segment.mp4 --output detected.mp4
+# パレット最適化つきでGIF化 (560px幅・96色で約2.8MB)
+ffmpeg -i detected.mp4 -vf "fps=10,scale=560:-1:flags=lanczos,split[s0][s1];\
+[s0]palettegen=max_colors=96[p];[s1][p]paletteuse=dither=bayer:bayer_scale=3" \
+  docs/images/demo.gif
+```
+
 ## テスト実行
 
 GoogleTestによる単体テスト (letterbox・NMS・decode・CLI引数解析・ラベル読込・結果出力) を
@@ -170,8 +190,19 @@ letterbox前処理・grid/strideデコード・NMSの3箇所は、Python (numpy 
 ```bash
 python -m pip install -r scripts/requirements-dev.txt
 cmake --build --preset msys2-ucrt64-debug   # yolox_onnx_cpp を先にビルドしておく
-python scripts/verify_parity.py --verbose
+python scripts/verify_parity.py --verbose            # nano
+python scripts/verify_parity.py --model tiny --verbose
 ```
+
+`--size` は省略するとモデルの入力shapeから決まる。YOLOX 0.1.1rc0 の配布ONNXは
+nano/tiny とも入力が `[1, 3, 416, 416]` に**固定**されており、`--size 640` のような
+別サイズは指定しても推論できない (ONNX Runtimeが `InvalidArgument` を返す)。
+そのため `--size` がモデル側と食い違う場合はスクリプトが実行前に理由付きで停止する。
+
+別サイズを検証したい場合は、入力H/Wを動的軸にして再エクスポートしたモデルを
+`--model <path>` にパスで渡す (`--model` は登録済みキーとパスの両方を受け付ける)。
+グラフ自体は全層畳み込みなので、動的軸版では 640 (アンカー数8400) でも
+nano/tiny 両方で座標・スコアが一致することを確認済み。
 
 ## 設計判断
 
