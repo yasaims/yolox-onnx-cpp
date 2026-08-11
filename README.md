@@ -170,8 +170,19 @@ letterbox前処理・grid/strideデコード・NMSの3箇所は、Python (numpy 
 ```bash
 python -m pip install -r scripts/requirements-dev.txt
 cmake --build --preset msys2-ucrt64-debug   # yolox_onnx_cpp を先にビルドしておく
-python scripts/verify_parity.py --verbose
+python scripts/verify_parity.py --verbose            # nano
+python scripts/verify_parity.py --model tiny --verbose
 ```
+
+`--size` は省略するとモデルの入力shapeから決まる。YOLOX 0.1.1rc0 の配布ONNXは
+nano/tiny とも入力が `[1, 3, 416, 416]` に**固定**されており、`--size 640` のような
+別サイズは指定しても推論できない (ONNX Runtimeが `InvalidArgument` を返す)。
+そのため `--size` がモデル側と食い違う場合はスクリプトが実行前に理由付きで停止する。
+
+別サイズを検証したい場合は、入力H/Wを動的軸にして再エクスポートしたモデルを
+`--model <path>` にパスで渡す (`--model` は登録済みキーとパスの両方を受け付ける)。
+グラフ自体は全層畳み込みなので、動的軸版では 640 (アンカー数8400) でも
+nano/tiny 両方で座標・スコアが一致することを確認済み。
 
 ## 設計判断
 
