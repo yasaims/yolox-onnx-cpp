@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  # ADR 0003: FetchContentは使わず「発見」と「取得」を分離する。
+  # OpenCV/GoogleTestはaptで導入し(find_packageのみ)、ONNX Runtimeだけは
+  # 公式プリビルトtarballを取得してcmake/Findonnxruntime.cmakeに探させる。
+  ONNXRUNTIME_VERSION: "1.20.1"
+
+jobs:
+  build-and-test:
+    name: ubuntu-24.04 / ${{ matrix.compiler }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools and library dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build libopencv-dev libgtest-dev
+          if [ "${{ matrix.compiler }}" = "clang" ]; then
+            sudo apt-get install -y --no-install-recommends clang
+          fi
+
+      - name: Cache ONNX Runtime prebuilt archive
+        id: cache-ort
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/onnxruntime
+          key: onnxruntime-linux-x64-${{ env.ONNXRUNTIME_VERSION }}
+
+      - name: Download ONNX Runtime prebuilt (CPU EP)
+        if: steps.cache-ort.outputs.cache-hit != 'true'
+        run: |
+          curl -sSL -o /tmp/onnxruntime.tgz \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz"
+          mkdir -p "${{ runner.temp }}/onnxruntime"
+          tar -xzf /tmp/onnxruntime.tgz --strip-components=1 -C "${{ runner.temp }}/onnxruntime"
+
+      - name: Configure
+        run: |
+          if [ "${{ matrix.compiler }}" = "clang" ]; then
+            preset=linux-clang-release
+          else
+            preset=linux-gcc-release
+          fi
+          cmake --preset "$preset" \
+            -DONNXRUNTIME_ROOT="${{ runner.temp }}/onnxruntime" \
+            -DYOLOX_WERROR=ON
+
+      - name: Build
+        run: |
+          if [ "${{ matrix.compiler }}" = "clang" ]; then
+            preset=linux-clang-release
+          else
+            preset=linux-gcc-release
+          fi
+          cmake --build --preset "$preset"
+
+      - name: Test
+        env:
+          # onnxruntime.so / OpenCVの共有ライブラリをテスト実行時に見つけるため。
+          LD_LIBRARY_PATH: ${{ runner.temp }}/onnxruntime/lib
+        run: |
+          if [ "${{ matrix.compiler }}" = "clang" ]; then
+            preset=linux-clang-release
+          else
+            preset=linux-gcc-release
+          fi
+          ctest --preset "$preset"

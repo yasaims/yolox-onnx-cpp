@@ -1,0 +1,77 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "msys2-ucrt64-debug",
+      "displayName": "MSYS2 UCRT64 (Debug, Ninja)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/msys2-ucrt64-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "C:/msys64/ucrt64/bin/gcc.exe",
+        "CMAKE_CXX_COMPILER": "C:/msys64/ucrt64/bin/g++.exe"
+      }
+    },
+    {
+      "name": "msys2-ucrt64-release",
+      "displayName": "MSYS2 UCRT64 (Release, Ninja)",
+      "inherits": "msys2-ucrt64-debug",
+      "binaryDir": "${sourceDir}/build/msys2-ucrt64-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "linux-gcc-release",
+      "displayName": "Linux gcc (Release, Ninja)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux-gcc-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++"
+      }
+    },
+    {
+      "name": "linux-clang-release",
+      "displayName": "Linux clang (Release, Ninja)",
+      "inherits": "linux-gcc-release",
+      "binaryDir": "${sourceDir}/build/linux-clang-release",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "msys2-ucrt64-debug",
+      "configurePreset": "msys2-ucrt64-debug"
+    },
+    {
+      "name": "msys2-ucrt64-release",
+      "configurePreset": "msys2-ucrt64-release"
+    },
+    {
+      "name": "linux-gcc-release",
+      "configurePreset": "linux-gcc-release"
+    },
+    {
+      "name": "linux-clang-release",
+      "configurePreset": "linux-clang-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "linux-gcc-release",
+      "configurePreset": "linux-gcc-release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "linux-clang-release",
+      "configurePreset": "linux-clang-release",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}
