@@ -4,3 +4,5 @@ AGENTS.md
 
 build
 models/*.onnx
+__pycache__/
+*.pyc
