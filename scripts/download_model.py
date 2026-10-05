@@ -1,14 +1,8 @@
 #!/usr/bin/env python3
-"""Download a YOLOX ONNX model into models/.
-
-Standard-library only (urllib), so it runs anywhere Python 3 does without
-extra dependencies. Verifies the download against a pinned SHA256 so a
-corrupted or unexpected file is never silently used, and skips re-downloading
-if a valid file already exists.
+"""Download a YOLOX ONNX model into models/ (SHA256-verified).
 
 Usage:
-    python scripts/download_model.py            # fetches yolox_nano.onnx
-    python scripts/download_model.py --model tiny
+    python scripts/download_model.py [--model nano|tiny]
 """
 from __future__ import annotations
 
@@ -21,8 +15,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MODELS_DIR = REPO_ROOT / "models"
 
-# Pinned to the YOLOX 0.1.1rc0 release assets. Update alongside the SHA256
-# below if the upstream release is ever re-tagged.
 MODELS = {
     "nano": {
         "url": "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_nano.onnx",

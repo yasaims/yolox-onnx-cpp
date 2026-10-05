@@ -10,9 +10,7 @@
 
 namespace yolox::engine {
 
-// Thin RAII wrapper around Ort::Env / Ort::Session. Deliberately kept free
-// of any pre/post-processing knowledge: it accepts a flat CHW float tensor
-// and returns the model's raw output tensors, nothing more.
+// Ort::Session の薄い RAII ラッパー。前後処理は知らない。
 class InferenceSession {
 public:
     struct Options {
@@ -26,10 +24,7 @@ public:
     const std::vector<TensorInfo>& inputs() const noexcept { return inputs_; }
     const std::vector<TensorInfo>& outputs() const noexcept { return outputs_; }
 
-    // Runs inference on a single input tensor. `input_data` must stay alive
-    // for the duration of this call (ONNX Runtime wraps it without copying).
-    // Assumes a single-input model, which covers YOLOX; multi-input models
-    // are out of scope for this wrapper.
+    // 単一入力モデル専用。input_data は呼び出し中コピーされず参照される。
     std::vector<Ort::Value> run(const std::vector<float>& input_data,
                                  const std::vector<int64_t>& input_shape);
 
@@ -38,8 +33,7 @@ private:
     std::vector<TensorInfo> inputs_;
     std::vector<TensorInfo> outputs_;
 
-    // Kept alive for the lifetime of the session because run() hands raw
-    // const char* pointers into these strings to the ORT C++ API.
+    // run() が生ポインタを ORT に渡すため保持する。
     std::vector<std::string> input_names_;
     std::vector<std::string> output_names_;
 };

@@ -9,17 +9,15 @@
 
 namespace yolox::io {
 
-// class_id から決定的に色を決める。同じクラスは常に同じ色になる。
+// 同じ class_id は常に同じ色。
 cv::Scalar ColorForClass(int class_id);
 
-// 検出結果を image に直接描画する (矩形 + "label 0.87" のラベル背景付き)。
-// labels 版はカスタムラベル配列を使う (範囲外は "class_<id>" にフォールバック、labels.hpp 参照)。
-// 引数なし版は COCO 80 既定 (DefaultCocoLabels()) に委譲する。
+// 検出結果を image に描画する。labels 範囲外の id は "class_<id>"。
 void DrawDetections(cv::Mat& image, const std::vector<postprocess::Detection>& detections,
                      const std::vector<std::string>& labels);
 void DrawDetections(cv::Mat& image, const std::vector<postprocess::Detection>& detections);
 
-// 左上に半透明背景付きで "FPS: 12.3" を描画する (動画パスのオーバーレイ用)。
+// 左上に FPS を描画する。
 void DrawFps(cv::Mat& image, double fps);
 
 }  // namespace yolox::io

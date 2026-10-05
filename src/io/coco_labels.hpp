@@ -4,8 +4,7 @@
 
 namespace yolox::io {
 
-// COCO 80 クラス名 (公式順、person始まり toothbrush終わり)。
-// --labels によるカスタムファイル指定は Phase 4 で追加予定。
+// COCO 80 クラス名 (公式順)。
 inline constexpr std::array<const char*, 80> kCocoClassNames = {
     "person",        "bicycle",      "car",           "motorcycle",    "airplane",
     "bus",           "train",        "truck",         "boat",          "traffic light",

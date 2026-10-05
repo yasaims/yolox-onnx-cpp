@@ -1,15 +1,18 @@
 # ADR 0001: C++17 を採用する
 
+## Status
+
+Accepted
+
 ## Context
 
-本プロジェクトはモダンC++のスキル実証が目的。C++20は`std::span`や`concepts`など推論・画像処理コードに有用な機能を持つが、MSYS2 UCRT64のgccやチェックする範囲のツールチェーンで安定して使えるかを個別に確認する必要がある。CI (Phase 3) では複数コンパイラでのビルドを予定している。
+C++20 には `std::span` や `concepts` など推論・画像処理コードに有用な機能があるが、対象ツールチェーン (MSYS2 UCRT64 の gcc、CI の Linux gcc/clang) すべてで安定して使えるかは機能ごとに確認が要る。
 
 ## Decision
 
-C++17を標準とし、`CMAKE_CXX_STANDARD 17` / `CXX_STANDARD_REQUIRED ON` / `CXX_EXTENSIONS OFF` を採用する。個別のC++20機能（例: `std::span`）は、採用する時点で対応コンパイラを確認したうえでADRを追加して記録する。
+**C++17 を標準とする** (`CMAKE_CXX_STANDARD 17` / `CXX_STANDARD_REQUIRED ON` / `CXX_EXTENSIONS OFF`)。個別の C++20 機能を採用する場合は、全対象コンパイラでの対応を確認したうえで ADR を追加する。
 
 ## Consequences
 
-- `std::optional` / 構造化束縛 / `if constexpr` などC++17機能は自由に使える
-- `std::span`は使わず、`std::vector<T>`への`const&`渡しで代替する
-- 将来C++20機能を部分的に採用する場合は、CI環境で先にコンパイル確認してから導入する
+- `std::optional` / 構造化束縛 / `if constexpr` などの C++17 機能は自由に使える
+- `std::span` は使わず、`const std::vector<T>&` 渡しで代替する

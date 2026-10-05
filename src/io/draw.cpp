@@ -10,7 +10,7 @@
 namespace yolox::io {
 
 cv::Scalar ColorForClass(int class_id) {
-    // クラスIDから決定的にHSVの色相を割り当て、BGRへ変換する。80色を手書きしない。
+    // class_id から決定的に HSV 色相を割り当て BGR へ変換する。
     const int hue = (class_id * 180) / 80;
     cv::Mat hsv(1, 1, CV_8UC3, cv::Scalar(hue, 200, 255));
     cv::Mat bgr;

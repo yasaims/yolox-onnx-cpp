@@ -1,6 +1,4 @@
-# scripts/verify_parity.py の実行に必要な開発用依存関係。
-# ランタイム本体 (C++ CLI) には不要。
-#   pip install -r scripts/requirements-dev.txt
+# Dev dependencies for scripts/verify_parity.py
 numpy
 opencv-python
 onnxruntime

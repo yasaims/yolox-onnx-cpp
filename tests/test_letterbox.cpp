@@ -63,3 +63,11 @@ TEST(ToChwFloat, KeepsBgrOrderNoColorConversion) {
     EXPECT_FLOAT_EQ(chw[1], 20.0F);  // G
     EXPECT_FLOAT_EQ(chw[2], 30.0F);  // R
 }
+
+TEST(Letterbox, ExtremeAspectRatioKeepsTargetSize) {
+    cv::Mat src(1, 1000, CV_8UC3, cv::Scalar(10, 20, 30));
+    LetterboxResult result;
+    ASSERT_NO_THROW(result = Letterbox(src, cv::Size(416, 416)));
+    EXPECT_EQ(result.image.cols, 416);
+    EXPECT_EQ(result.image.rows, 416);
+}

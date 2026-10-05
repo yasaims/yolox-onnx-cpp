@@ -10,6 +10,9 @@ Detector::Detector(const std::string& model_path, const DetectorConfig& config)
     : session_(model_path), config_(config) {}
 
 std::vector<postprocess::Detection> Detector::Detect(const cv::Mat& image) {
+    if (image.empty() || image.type() != CV_8UC3) {
+        throw DetectorError("Input image must be non-empty 8-bit 3-channel (CV_8UC3)");
+    }
     const cv::Size target_size(config_.input_size, config_.input_size);
     const preprocess::LetterboxResult letterboxed = preprocess::Letterbox(image, target_size);
     const std::vector<float> input_data = preprocess::ToChwFloat(letterboxed.image);
@@ -20,7 +23,6 @@ std::vector<postprocess::Detection> Detector::Detect(const cv::Mat& image) {
         throw DetectorError("Model produced no output tensors");
     }
 
-    // 検出ヘッド出力は shape [1, num_anchors, 5+num_classes] を想定する。
     const auto out_shape = outputs[0].GetTensorTypeAndShapeInfo().GetShape();
     if (out_shape.size() != 3 || out_shape[0] != 1 || out_shape[2] <= 5) {
         throw DetectorError("Unexpected output tensor shape (expected [1, num_anchors, 5+num_classes])");

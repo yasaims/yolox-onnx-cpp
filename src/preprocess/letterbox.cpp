@@ -8,15 +8,12 @@
 namespace yolox::preprocess {
 
 LetterboxResult Letterbox(const cv::Mat& src, const cv::Size& target, int pad_value) {
-    // YOLOX 公式 preproc と同じ手順: アスペクト比を保つ倍率を一つだけ取り、
-    // リサイズ画像を左上原点に置いて右と下にだけパディングを足す
-    // (中央寄せではない — 座標逆変換をオフセット無しのスケール除算だけで
-    // 済ませるための仕様)。
+    // パディングは右下のみ (中央寄せしない)。逆変換を ratio の除算だけで済ませるため。
     const float ratio = std::min(static_cast<float>(target.height) / static_cast<float>(src.rows),
                                   static_cast<float>(target.width) / static_cast<float>(src.cols));
 
-    const int resized_w = static_cast<int>(static_cast<float>(src.cols) * ratio);
-    const int resized_h = static_cast<int>(static_cast<float>(src.rows) * ratio);
+    const int resized_w = std::max(1, static_cast<int>(static_cast<float>(src.cols) * ratio));
+    const int resized_h = std::max(1, static_cast<int>(static_cast<float>(src.rows) * ratio));
 
     cv::Mat resized;
     cv::resize(src, resized, cv::Size(resized_w, resized_h), 0, 0, cv::INTER_LINEAR);
@@ -47,7 +44,7 @@ std::vector<float> ToChwFloat(const cv::Mat& hwc_bgr) {
 
     std::vector<float> chw(plane_size * 3);
     for (int c = 0; c < 3; ++c) {
-        // cv::split の出力は常に連続領域を持つため memcpy でそのままコピーできる。
+        // cv::split の出力は連続領域。
         std::memcpy(chw.data() + static_cast<size_t>(c) * plane_size, channels[c].ptr<float>(),
                     plane_size * sizeof(float));
     }

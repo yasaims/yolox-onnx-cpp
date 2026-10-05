@@ -8,8 +8,7 @@
 
 namespace yolox::engine {
 
-// Metadata describing one model input or output. Dynamic dimensions (e.g.
-// batch size) are kept as -1, mirroring ONNX Runtime's own convention.
+// 動的次元は -1。
 struct TensorInfo {
     std::string name;
     std::vector<int64_t> shape;

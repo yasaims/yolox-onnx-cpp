@@ -1,6 +1,3 @@
-// Phase 4 CLI entry point: 引数解析 -> ラベル読込 -> Detector構築 -> 静止画/動画モード分岐、
-// までを行う薄い層。letterbox前処理〜座標逆変換の実体は pipeline::Detector (Phase 2の
-// パイプラインを再利用可能なクラスへ抽出したもの) が持ち、静止画・動画の両パスで共有する。
 #include <algorithm>
 #include <chrono>
 #include <deque>
@@ -35,7 +32,6 @@ void PrintTensorInfo(const char* label, const yolox::engine::TensorInfo& info) {
     std::cout << "]\n";
 }
 
-// 拡張子 (小文字化) から動画かどうかを推定する。--mode auto のときのみ使う。
 bool LooksLikeVideo(const std::string& path) {
     static const std::vector<std::string> kVideoExtensions = {".mp4", ".avi", ".mov",
                                                                 ".mkv", ".webm", ".m4v"};

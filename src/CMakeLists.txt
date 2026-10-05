@@ -76,10 +76,8 @@ target_link_libraries(yolox_onnx_cpp PRIVATE
   yolox_warnings
 )
 
-# On Windows, onnxruntime.dll must sit next to the executable at runtime.
-# $<TARGET_RUNTIME_DLLS:...> is an empty list on Linux/macOS, which makes
-# copy_if_different receive zero arguments and fail; limit to WIN32 (see
-# same pattern in tests/CMakeLists.txt).
+# Windows では onnxruntime.dll を実行ファイルの隣に置く。
+# TARGET_RUNTIME_DLLS は Linux/macOS で空になり copy_if_different が失敗するため WIN32 限定。
 if(WIN32)
   add_custom_command(TARGET yolox_onnx_cpp POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different

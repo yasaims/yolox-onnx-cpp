@@ -10,18 +10,14 @@ namespace yolox::engine {
 
 namespace {
 
-// Ort::Env is process-wide; a Meyers singleton keeps exactly one alive for
-// the life of the program regardless of how many InferenceSession instances
-// are created.
+// Ort::Env はプロセスで 1 つだけ保持する。
 Ort::Env& GlobalEnv() {
     static Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "yolox_onnx_cpp");
     return env;
 }
 
 #ifdef _WIN32
-// On Windows, Ort::Session takes the model path as a wchar_t*. This applies
-// under MSYS2/MinGW too, since _WIN32 is defined there as well. Uses the
-// Win32 API directly rather than the deprecated std::wstring_convert.
+// Windows (MSYS2 含む) の Ort::Session はモデルパスを wchar_t* で受け取る。
 std::wstring ToWideString(const std::string& s) {
     if (s.empty()) return std::wstring();
     const int required = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
@@ -83,8 +79,7 @@ std::vector<Ort::Value> InferenceSession::run(const std::vector<float>& input_da
                                                 const std::vector<int64_t>& input_shape) {
     const Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
 
-    // const_cast is safe here: ORT only reads from the input tensor. The
-    // API just doesn't expose a const-correct overload.
+    // ORT は入力を読むだけなので const_cast は安全。
     Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
         memory_info, const_cast<float*>(input_data.data()), input_data.size(),
         input_shape.data(), input_shape.size());

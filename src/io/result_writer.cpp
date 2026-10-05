@@ -8,8 +8,7 @@ namespace yolox::io {
 
 namespace {
 
-// JSON文字列リテラル用のエスケープ。ラベル名にユーザ由来の任意文字列 (--labels) が
-// 入りうるため、"、\、制御文字を確実にエスケープする。
+// JSON 文字列エスケープ (--labels 由来の任意文字列対策)。
 std::string JsonEscape(const std::string& s) {
     std::string out;
     out.reserve(s.size() + 2);

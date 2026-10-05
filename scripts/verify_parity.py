@@ -1,30 +1,10 @@
 #!/usr/bin/env python3
-"""Verify numeric parity between the C++ CLI and an independent Python reference.
-
-This does NOT call into the C++ implementation. It re-implements letterbox
-preprocessing, grid/stride decoding, and NMS from scratch in numpy, following
-the same spec documented in CLAUDE.md ("既知のハマりどころ"):
-
-  - preprocessing stays BGR, no /255 normalization
-  - letterbox padding is bottom-right only (no offset to subtract back)
-  - grid order is stride-ascending (8, 16, 32), y-outer / x-inner within a stride
-
-The C++ side is exercised by running the built `yolox_onnx_cpp` CLI and
-parsing its stdout detection lines - the binary itself is not modified.
-Because the two implementations are independent, agreement on the final
-detections is evidence the three specs above are actually consistent between
-languages, not just internally self-consistent.
+"""Check numeric parity between the C++ CLI and an independent numpy reference.
 
 Usage:
-    python -m pip install -r scripts/requirements-dev.txt
-    python scripts/verify_parity.py [--model nano|tiny|path/to/model.onnx]
-        [--input tests/data/test.jpg] [--size 416] [--score-thr 0.30]
-        [--nms-thr 0.45] [--bin path/to/exe] [--atol 0.05] [--verbose]
-
---size は省略するとモデルの入力shapeから決まる。YOLOX 0.1.1rc0 の配布ONNX
-(nano/tiny とも) は入力が [1, 3, 416, 416] に固定されているため、--size で
-他の値を指定しても推論できない。他サイズを試す場合は動的軸で再エクスポートした
-モデルを --model にパスで渡す。
+    python scripts/verify_parity.py [--model nano|tiny|path.onnx] [--input IMG]
+        [--size 416] [--score-thr 0.30] [--nms-thr 0.45] [--bin EXE]
+        [--atol 0.05] [--verbose]
 """
 from __future__ import annotations
 
@@ -53,13 +33,8 @@ DETECTION_LINE_RE = re.compile(
 )
 
 
-# --- Python参照実装 (letterbox.cpp / decode.cpp / nms.cpp を独立に再実装) --------
-
 def letterbox_ref(image: np.ndarray, target_size: int, pad_value: int = 114):
-    """letterbox.cpp と同じ手順: アスペクト比維持リサイズ + 右下パディングのみ。
-
-    BGRのまま・色変換なし・255スケールのまま(正規化なし)がYOLOXの前処理仕様。
-    """
+    """Aspect-preserving resize, bottom-right padding; BGR, 0-255, no normalization."""
     h, w = image.shape[:2]
     ratio = min(target_size / h, target_size / w)
     resized_w = int(w * ratio)
@@ -69,17 +44,12 @@ def letterbox_ref(image: np.ndarray, target_size: int, pad_value: int = 114):
     padded = np.full((target_size, target_size, 3), pad_value, dtype=np.uint8)
     padded[:resized_h, :resized_w] = resized
 
-    chw = padded.astype(np.float32).transpose(2, 0, 1)  # BGR, 0-255スケール
+    chw = padded.astype(np.float32).transpose(2, 0, 1)
     return chw, ratio
 
 
 def generate_grid_strides_ref(input_size: int, strides=STRIDES):
-    """stride昇順・各stride内はy外側/x内側の順でアンカー座標を生成する。
-
-    input_size が stride で割り切れない場合、`input_size // stride` が切り捨てられて
-    モデル側のグリッド数と静かにズレる。--size 側で弾いているが、この関数を直接
-    呼ばれた場合に備えてここでも検査する。
-    """
+    """Stride ascending; y outer, x inner within each stride."""
     for stride in strides:
         if input_size % stride != 0:
             raise ValueError(
@@ -103,9 +73,7 @@ def generate_grid_strides_ref(input_size: int, strides=STRIDES):
 
 
 def decode_ref(output: np.ndarray, input_size: int, score_threshold: float):
-    """output: [num_anchors, num_attrs] (5 + num_classes)。objectness/クラス確率は
-    sigmoid適用済みの前提でgrid/strideデコードのみ行う。letterbox座標系のまま返す。
-    """
+    """Decode [num_anchors, 5 + num_classes] (sigmoid already applied) in letterbox coords."""
     num_anchors, num_attrs = output.shape
     grid_x, grid_y, stride = generate_grid_strides_ref(input_size)
     if len(grid_x) != num_anchors:
@@ -123,7 +91,7 @@ def decode_ref(output: np.ndarray, input_size: int, score_threshold: float):
     best_class_score = np.max(class_scores, axis=1)
     score = objectness * best_class_score
 
-    keep = score >= score_threshold  # C++は `score < threshold` で捨てる -> 境界含む
+    keep = score >= score_threshold  # inclusive, matching C++ `score < threshold` rejection
     boxes = np.stack([cx - w / 2.0, cy - h / 2.0, w, h], axis=1)
     return boxes[keep], score[keep], class_id[keep]
 
@@ -144,7 +112,7 @@ def iou_ref(box_a: np.ndarray, box_b: np.ndarray) -> float:
 
 
 def nms_ref(boxes: np.ndarray, scores: np.ndarray, class_ids: np.ndarray, iou_threshold: float):
-    """クラス別greedy NMS。nms.cppと同じくスコア降順に走査しIoU>閾値を抑制する。"""
+    """Per-class greedy NMS, score-descending, suppress IoU > threshold."""
     order = np.argsort(-scores)
     suppressed = np.zeros(len(order), dtype=bool)
     kept_indices = []
@@ -165,7 +133,7 @@ def nms_ref(boxes: np.ndarray, scores: np.ndarray, class_ids: np.ndarray, iou_th
 
 
 def to_original_scale_ref(box: np.ndarray, ratio: float, original_size: tuple[int, int]):
-    """letterbox座標系 -> 元画像座標系。パディングは右下のみなのでオフセット不要。"""
+    """Letterbox -> original coords (no offset: padding is bottom-right only)."""
     x, y, w, h = box / ratio
     orig_w, orig_h = original_size
     x1 = max(0.0, min(x, orig_w))
@@ -182,11 +150,11 @@ def run_python_reference(session: "ort.InferenceSession", image_path: Path, size
         raise SystemExit(f"failed to read input image: {image_path}")
 
     chw, ratio = letterbox_ref(image, size)
-    input_tensor = chw[np.newaxis, :, :, :]  # [1, 3, size, size]
+    input_tensor = chw[np.newaxis, :, :, :]
 
     input_name = session.get_inputs()[0].name
     (raw_output,) = session.run(None, {input_name: input_tensor})
-    output = raw_output[0]  # [num_anchors, num_attrs]
+    output = raw_output[0]
 
     boxes, scores, class_ids = decode_ref(output, size, score_thr)
     kept = nms_ref(boxes, scores, class_ids, nms_thr)
@@ -207,14 +175,8 @@ def run_python_reference(session: "ort.InferenceSession", image_path: Path, size
     return detections
 
 
-# --- モデル・入力サイズの解決 -------------------------------------------------
-
 def resolve_model(spec: str) -> Path:
-    """--model は登録済みキー (nano/tiny) と .onnx のパスの両方を受け付ける。
-
-    パスを許すのは、動的軸で再エクスポートしたモデルなど download_model.py の
-    管理外のモデルでもparityを取れるようにするため。
-    """
+    """Accept a registered key or a path to an .onnx file."""
     if spec in MODELS:
         return download(spec)
 
@@ -229,11 +191,7 @@ def resolve_model(spec: str) -> Path:
 
 
 def static_input_size(session: "ort.InferenceSession", model_path: Path) -> int | None:
-    """モデル入力の一辺のピクセル数。動的軸なら None を返す。
-
-    入力shapeは [N, C, H, W] 前提。動的軸の次元は int ではなく次元名の文字列
-    (または None) として返ってくるので、それで静的/動的を判別する。
-    """
+    """Square input side in pixels, or None if the axes are dynamic."""
     shape = session.get_inputs()[0].shape
     if len(shape) != 4:
         raise SystemExit(
@@ -252,11 +210,7 @@ def static_input_size(session: "ort.InferenceSession", model_path: Path) -> int 
 
 
 def resolve_size(requested: int | None, model_size: int | None, model_path: Path) -> int:
-    """--size とモデル側の入力サイズを突き合わせて実際に使うサイズを決める。
-
-    配布ONNXは入力shapeが固定なので、--size を食い違わせるとONNX Runtimeが
-    InvalidArgumentを投げる。それをそのまま素通しせず、原因と回避策を示す。
-    """
+    """Reconcile --size with the model's input size."""
     if model_size is None:
         if requested is None:
             raise SystemExit(
@@ -285,8 +239,6 @@ def resolve_size(requested: int | None, model_size: int | None, model_path: Path
             )
     return size
 
-
-# --- C++ CLIの標準出力パース ------------------------------------------------
 
 def find_cli_binary() -> Path:
     candidates = sorted(
@@ -332,8 +284,6 @@ def run_cpp_cli(binary: Path, model_path: Path, image_path: Path, size: int,
         })
     return detections
 
-
-# --- 比較 -----------------------------------------------------------------
 
 def compare(py_dets, cpp_dets, atol: float, score_atol: float = 1e-4) -> bool:
     if len(py_dets) != len(cpp_dets):

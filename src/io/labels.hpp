@@ -5,15 +5,14 @@
 
 namespace yolox::io {
 
-// kCocoClassNames (coco_labels.hpp) を std::vector<std::string> に写したもの。
+// COCO 80 既定ラベル。
 std::vector<std::string> DefaultCocoLabels();
 
-// 1行1ラベルのテキストファイルを読む。前後空白はトリムし、空行と '#' 始まりの行は無視する。
-// ファイルが開けない、または有効なラベルが1件も無い場合は std::runtime_error を送出する。
+// 1行1ラベル。前後空白をトリムし、空行と # 始まりは無視。
+// 開けない / 有効ラベルが無い場合は std::runtime_error。
 std::vector<std::string> LoadLabels(const std::string& path);
 
-// class_id に対応するラベル名。範囲外は "class_<id>" にフォールバックする
-// (draw.cpp が元々持っていた挙動をここに集約した)。
+// class_id のラベル名。範囲外は "class_<id>"。
 std::string LabelFor(const std::vector<std::string>& labels, int class_id);
 
 }  // namespace yolox::io
